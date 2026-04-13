@@ -3,31 +3,63 @@
 <head>
     <meta charset="UTF-8">
     <title>Evidencias QA</title>
+
     <style>
         body {
-            font-family: Arial, sans-serif;
+            margin: 0;
+            height: 100vh;
+            font-family: Arial, Helvetica, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background: linear-gradient(135deg, #0f4c75, #3282b8);
+        }
+
+        .card {
+            background: #ffffff;
+            padding: 50px 60px;
+            border-radius: 14px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
             text-align: center;
-            margin-top: 100px;
         }
 
         h1 {
-            margin-bottom: 40px;
+            margin-bottom: 30px;
+            color: #0f4c75;
+            font-size: 32px;
         }
 
         button {
-            padding: 12px 24px;
+            background-color: #0f4c75;
+            color: #ffffff;
+            border: none;
+            padding: 14px 32px;
             font-size: 16px;
+            border-radius: 8px;
             cursor: pointer;
+            transition: background-color 0.3s, transform 0.2s, box-shadow 0.2s;
+        }
+
+        button:hover {
+            background-color: #1b6ca8;
+            transform: translateY(-2px);
+            box-shadow: 0 6px 15px rgba(0, 0, 0, 0.2);
+        }
+
+        button:active {
+            transform: translateY(0);
+            box-shadow: none;
         }
     </style>
 </head>
 <body>
 
-    <h1>Evidencias QA</h1>
-
-    <button onclick="window.location.href='13-04-2026/index.html'">
-        Ver evidencias
-    </button>
+    <div class="card">
+        <h1>Evidencias QA</h1>
+        <button onclick="window.location.href='13-04-2026/index.html'">
+            Ver evidencias - 13/04/2026
+        </button>
+    </div>
 
 </body>
 </html>
