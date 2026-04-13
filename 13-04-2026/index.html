@@ -1,1 +1,180 @@
-aaaaa
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Reporte QA</title>
+
+  <!-- 🔥 CLAVE: base para GitHub Pages -->
+  <base href="/Sitio-DGSISAN-QA/">
+
+  <style>
+    body {
+      background-color: #708fac;
+      color: #ffffff;
+      font-family: Segoe UI, Calibri, Arial, sans-serif;
+    }
+
+    .container {
+      max-width: 1100px;
+      margin: 40px auto;
+    }
+
+    .qa-panel {
+      padding: 26px 30px;
+      background: #163d66;
+      border-radius: 14px;
+      margin-bottom: 30px;
+    }
+
+    .qa-panel h2 {
+      margin-top: 0;
+      color: #dbe9ff;
+    }
+
+    .qa-actions {
+      display: flex;
+      gap: 14px;
+      flex-wrap: wrap;
+      margin-top: 18px;
+    }
+
+    .qa-button {
+      padding: 12px 20px;
+      border-radius: 10px;
+      text-decoration: none;
+      font-weight: 600;
+      background: #1f6feb;
+      color: white;
+    }
+
+    .qa-button:hover {
+      background: #388bfd;
+    }
+
+    .summary {
+      display: flex;
+      gap: 30px;
+      flex-wrap: wrap;
+      margin-top: 15px;
+    }
+
+    .card {
+      background: #1e4f7a;
+      padding: 15px;
+      border-radius: 10px;
+      min-width: 150px;
+      text-align: center;
+    }
+
+    .big {
+      font-size: 28px;
+      font-weight: bold;
+    }
+
+    .results {
+      background: #ffffff;
+      color: #000;
+      padding: 20px;
+      border-radius: 10px;
+    }
+
+    .test {
+      padding: 10px;
+      margin-bottom: 10px;
+      border-radius: 6px;
+      background: #e6eff7;
+    }
+
+    .pass { color: green; font-weight: bold; }
+  </style>
+</head>
+
+<body>
+
+<div class="container">
+
+  <!-- 📊 RESUMEN -->
+  <div class="qa-panel">
+    <h2>📊 Resumen de Ejecución 13/04 GDEA</h2>
+
+    <div class="summary">
+      <div class="card">
+        <div>Total Tests</div>
+        <div class="big">4</div>
+      </div>
+
+      <div class="card">
+        <div>Passed</div>
+        <div class="big">4 ✅</div>
+      </div>
+
+      <div class="card">
+        <div>Failed</div>
+        <div class="big">0 ❌</div>
+      </div>
+
+      <div class="card">
+        <div>Duración</div>
+        <div class="big">2m 35s</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 🔘 BOTONES -->
+  <div class="qa-panel">
+    <h2>📁 Reportes Detallados</h2>
+
+    <div class="qa-actions">
+
+      <a class="qa-button" href="Flujo_Agenda_Alta_20260413_102806/report_GDEA.html" target="_blank">
+        Flujo Agenda Alta
+      </a>
+
+      <a class="qa-button" href="Flujo_Agendas_Modificacion_20260413_102844/report_GDEA.html" target="_blank">
+        Modificación Agenda
+      </a>
+
+      <a class="qa-button" href="Login_AccesoGDEA_Y_OtorgarTurno_20260413_102915/report_GDEA.html" target="_blank">
+        Login y Turno
+      </a>
+
+      <a class="qa-button" href="Flujo_Agendas_Baja_20260413_103003/report_GDEA.html" target="_blank">
+        Baja Agenda
+      </a>
+
+    </div>
+  </div>
+
+  <!-- 📋 RESULTADOS -->
+  <div class="qa-panel">
+    <h2>📋 Resultados de Tests</h2>
+
+    <div class="results">
+
+      <div class="test">
+        <span class="pass">✔</span> Flujo_Agenda_Alta
+        <span style="float:right;">43s 476ms</span>
+      </div>
+
+      <div class="test">
+        <span class="pass">✔</span> Flujo_Agendas_Modificacion
+        <span style="float:right;">35s 258ms</span>
+      </div>
+
+      <div class="test">
+        <span class="pass">✔</span> Login_AccesoGDEA_Y_OtorgarTurno
+        <span style="float:right;">51s 509ms</span>
+      </div>
+
+      <div class="test">
+        <span class="pass">✔</span> Flujo_Agendas_Baja
+        <span style="float:right;">24s 422ms</span>
+      </div>
+
+    </div>
+  </div>
+
+</div>
+
+</body>
+</html>
