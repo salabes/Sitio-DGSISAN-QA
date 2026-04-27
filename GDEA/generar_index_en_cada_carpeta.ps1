@@ -251,8 +251,6 @@ ForEach-Object {
     $items = Build-ItemsFromImmediateSubfolders $datePath $testMap
 
     
-    $baseHref = "/$repoName/$dateName/"
-    
 
     # HTML REAL (NO escapado)
     $html = @"
@@ -261,7 +259,6 @@ ForEach-Object {
 <head>
 <meta charset="UTF-8">
 <title>Reporte QA GDEA</title>
-<base href="$baseHref">
 <style>
 body { background-color:#708fac; color:#ffffff; font-family:Segoe UI,Calibri,Arial,sans-serif; }
 .container { max-width:1100px; margin:40px auto; }
