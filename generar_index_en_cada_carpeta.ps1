@@ -5,12 +5,21 @@ $repoName = Split-Path $root -Leaf
 $regexFecha = '^\d{2}-\d{2}-\d{4}$'
 
 function Normalize-Html([string]$html) {
-    if ([string]::IsNullOrEmpty($html)) { return "" }
+    if ([string]::IsNullOrWhiteSpace($html)) { return "" }
 
-    # Si viene escapado como &lt;...&gt; lo decodificamos para poder parsear
-    $t = $html -replace '&lt;', '<' -replace '&gt;', '>' -replace '&quot;', '"' -replace '&#39;', "'" -replace '&amp;', '&'
-
+    # Decodifica HTML entities (soporta doble/triple-escapado: &amp;lt; -> &lt; -> <)
+    $t = $html
+    for ($i = 0; $i -lt 4; $i++) {
+        $decoded = [System.Net.WebUtility]::HtmlDecode($t)
+        if ($decoded -eq $t) { break }
+        $t = $decoded
+    }
     return $t
+}
+
+function Normalize-TestKey([string]$s) {
+    if ([string]::IsNullOrWhiteSpace($s)) { return $null }
+    return ($s.ToUpper() -replace '[^A-Z0-9]', '')
 }
 
 function Find-GeneralReport([string]$folderPath) {
@@ -18,7 +27,7 @@ function Find-GeneralReport([string]$folderPath) {
              Where-Object { $_.Name -ne "index.html" }
 
     foreach ($f in ($cands | Sort-Object LastWriteTime -Descending)) {
-        $raw = Get-Content -Raw -Encoding UTF8 $f.FullName
+        $raw  = Get-Content -Raw -Encoding UTF8 $f.FullName
         $html = Normalize-Html $raw
         if ($html -match '(?i)Reporte\s+General\s+GDEA') { return $f }
     }
@@ -30,6 +39,7 @@ function Extract-Counts([string]$rawHtml) {
 
     $total = 0; $ok = 0; $fail = 0; $dur = "-"
 
+    # Ahora matcheamos HTML REAL (</b>, </p>) porque Normalize-Html decodifica &lt; &gt;
     $m = [regex]::Match($html, '(?is)Total\s*tests\s*:\s*</b>\s*([0-9]+)')
     if ($m.Success) { $total = [int]$m.Groups[1].Value }
 
@@ -39,8 +49,8 @@ function Extract-Counts([string]$rawHtml) {
     $m = [regex]::Match($html, '(?is)Fallid(?:os|as)\s*:\s*</b>\s*([0-9]+)')
     if ($m.Success) { $fail = [int]$m.Groups[1].Value }
 
-    # Duracion total (con o sin acento)
-    $m = [regex]::Match($html, '(?is)Duraci[oó]n\s*total\s*:\s*</b>\s*([^<]+)</p>')
+    # Duración total: soporta Duración / Duracion / DuraciÃ³n (mojibake)
+    $m = [regex]::Match($html, '(?is)Duraci(?:ó|o|Ã³)n\s*total\s*:\s*</b>\s*([^<]+)</p>')
     if ($m.Success) { $dur = $m.Groups[1].Value.Trim() }
 
     return [PSCustomObject]@{ Total = $total; Ok = $ok; Fail = $fail; Duracion = $dur }
@@ -48,19 +58,36 @@ function Extract-Counts([string]$rawHtml) {
 
 function Extract-TestResultsFromGeneral([string]$rawHtml) {
     $html = Normalize-Html $rawHtml
-    $map = @{}
+    $map  = @{}
 
-    # MUY robusto: no depende de "–" ni de mojibake.
-    # Captura dentro de cada <div class="test ok|fail"> ... GDEA_xxx_Run ... OK/FAIL ... 12,34s ... </div>
-    $pattern = '(?is)<div[^>]*class\s*=\s*"test\s+(ok|fail)"[^>]*>.*?([A-Za-z0-9_]+_Run).*?(OK|FAIL).*?([0-9]+(?:[.,][0-9]+)?s).*?</div>'
-    $matches = [regex]::Matches($html, $pattern)
+    # Captura cada bloque: <div class="test ok|fail"> ...texto... </div>
+    $divPattern = '(?is)<div[^>]*class\s*=\s*"(?:[^"]*\s)?test\s+(ok|fail)(?:\s[^"]*)?"[^>]*>\s*(.*?)\s*</div>'
+    $divMatches = [regex]::Matches($html, $divPattern)
 
-    foreach ($m in $matches) {
-        $name = $m.Groups[2].Value.Trim()
-        $status = $m.Groups[3].Value.Trim().ToUpper()
-        $dur = $m.Groups[4].Value.Trim()
+    foreach ($m in $divMatches) {
+        $cls  = $m.Groups[1].Value.Trim().ToLower()  # ok | fail
+        $text = $m.Groups[2].Value
 
-        $map[$name] = @{ Status = $status; Duration = $dur }
+        # Normalizamos espacios y volvemos a decodear por si hay entidades adentro
+        $line = [System.Net.WebUtility]::HtmlDecode(($text -replace '\s+', ' ').Trim())
+
+        # Nombre: primer token estilo GDEA_XXX_Run o GDEARun, etc.
+        $mn = [regex]::Match($line, '\b([A-Za-z0-9_]+)\b')
+        if (-not $mn.Success) { continue }
+        $name = $mn.Groups[1].Value.Trim()
+
+        # Status: OK / FAIL (si no aparece, inferimos por la clase)
+        $ms = [regex]::Match($line, '\b(OK|FAIL)\b', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+        $status = if ($ms.Success) { $ms.Groups[1].Value.Trim().ToUpper() } else { if ($cls -eq 'ok') { 'OK' } else { 'FAIL' } }
+
+        # Duración: 36,96s o 36.96s
+        $md = [regex]::Match($line, '([0-9]+(?:[.,][0-9]+)?s)')
+        $dur = if ($md.Success) { $md.Groups[1].Value.Trim() } else { "" }
+
+        $key = Normalize-TestKey $name
+        if ($key) {
+            $map[$key] = @{ Status = $status; Duration = $dur; RawName = $name }
+        }
     }
 
     return $map
@@ -87,35 +114,149 @@ function Find-ReportInSubfolder([string]$subfolderPath) {
     return $p3
 }
 
-function Map-FolderToTestName([string]$folderName) {
-    $n = $folderName.ToUpper()
+function Get-TestNameCandidates([string]$folderName) {
+    $n = Normalize-TestKey $folderName
+    $c = New-Object System.Collections.Generic.List[string]
 
-    if ($n -match 'AGENDA' -and $n -match 'ALTA') { return 'GDEA_AGENDA_ALTA_Run' }
-    if ($n -match 'AGENDA' -and ($n -match 'MODIF' -or $n -match 'MOD')) { return 'GDEA_AGENDA_MODIFICACION_Run' }
-    if ($n -match 'AGENDA' -and $n -match 'BAJA') { return 'GDEA_AGENDA_BAJA_Run' }
+    # AGENDA
+    if ($n -match 'AGENDA' -and $n -match 'ALTA') { $c.Add('GDEA_AGENDA_ALTA_Run') }
+    if ($n -match 'AGENDA' -and ($n -match 'MODIF' -or $n -match 'MOD')) { $c.Add('GDEA_AGENDA_MODIFICACION_Run') }
+    if ($n -match 'AGENDA' -and $n -match 'BAJA') { $c.Add('GDEA_AGENDA_BAJA_Run') }
 
-    if ($n -match 'LICEN' -and $n -match 'ALTA') { return 'GDEA_LICENCIA_ALTA_Run' }
-    if ($n -match 'LICEN' -and $n -match 'BAJA') { return 'GDEA_LICENCIA_BAJA_Run' }
+    # LICENCIAS: si dice "Licencias" sin Alta/Baja, agregamos ambas (así el botón refleja el conjunto)
+    if ($n -match 'LICEN' -and -not ($n -match 'ALTA' -or $n -match 'BAJA' -or $n -match 'MODIF' -or $n -match 'MOD')) {
+        $c.Add('GDEA_LICENCIA_ALTA_Run')
+        $c.Add('GDEA_LICENCIA_BAJA_Run')
+        $c.Add('GDEA_LICENCIAS_ALTA_Run')
+        $c.Add('GDEA_LICENCIAS_BAJA_Run')
+    }
+    if ($n -match 'LICEN' -and $n -match 'ALTA') {
+        $c.Add('GDEA_LICENCIA_ALTA_Run')
+        $c.Add('GDEA_LICENCIAS_ALTA_Run')
+    }
+    if ($n -match 'LICEN' -and $n -match 'BAJA') {
+        $c.Add('GDEA_LICENCIA_BAJA_Run')
+        $c.Add('GDEA_LICENCIAS_BAJA_Run')
+    }
 
-    if ($n -match 'EQUIPOPROFESIONAL' -and $n -match 'ALTA') { return 'GDEA_EQUIPOPROFESIONAL_ALTA_Run' }
-    if ($n -match 'EQUIPOPROFESIONAL' -and ($n -match 'MODIF' -or $n -match 'MOD')) { return 'GDEA_EQUIPOPROFESIONAL_MODIFICACION_Run' }
-    if ($n -match 'EQUIPOPROFESIONAL' -and $n -match 'BAJA') { return 'GDEA_EQUIPOPROFESIONAL_BAJA_Run' }
+    # EQUIPO PROFESIONAL
+    if ($n -match 'EQUIPOPROFESIONAL' -and $n -match 'ALTA') { $c.Add('GDEA_EQUIPOPROFESIONAL_ALTA_Run') }
+    if ($n -match 'EQUIPOPROFESIONAL' -and ($n -match 'MODIF' -or $n -match 'MOD')) { $c.Add('GDEA_EQUIPOPROFESIONAL_MODIFICACION_Run') }
+    if ($n -match 'EQUIPOPROFESIONAL' -and $n -match 'BAJA') { $c.Add('GDEA_EQUIPOPROFESIONAL_BAJA_Run') }
 
-    if ($n -match 'FERIAD' -and $n -match 'ALTA') { return 'GDEA_FERIADOS_ALTA_Run' }
-    if ($n -match 'FERIAD' -and ($n -match 'MODIF' -or $n -match 'MOD')) { return 'GDEA_FERIADOS_MODIFICACION_Run' }
-    if ($n -match 'FERIAD' -and $n -match 'BAJA') { return 'GDEA_FERIADOS_BAJA_Run' }
+    # FERIADOS
+    if ($n -match 'FERIAD' -and $n -match 'ALTA') { $c.Add('GDEA_FERIADOS_ALTA_Run') }
+    if ($n -match 'FERIAD' -and ($n -match 'MODIF' -or $n -match 'MOD')) { $c.Add('GDEA_FERIADOS_MODIFICACION_Run') }
+    if ($n -match 'FERIAD' -and $n -match 'BAJA') { $c.Add('GDEA_FERIADOS_BAJA_Run') }
 
-    if ($n -match 'GRUPOUSUARIO' -and $n -match 'ALTA') { return 'GDEA_GRUPOUSUARIO_ALTA_Run' }
-    if ($n -match 'GRUPOUSUARIO' -and ($n -match 'MODIF' -or $n -match 'MOD')) { return 'GDEA_GRUPOUSUARIO_MODIFICACION_Run' }
-    if ($n -match 'GRUPOUSUARIO' -and $n -match 'BAJA') { return 'GDEA_GRUPOUSUARIO_BAJA_Run' }
+    # GRUPO USUARIO
+    if ($n -match 'GRUPOUSUARIO' -and $n -match 'ALTA') { $c.Add('GDEA_GRUPOUSUARIO_ALTA_Run') }
+    if ($n -match 'GRUPOUSUARIO' -and ($n -match 'MODIF' -or $n -match 'MOD')) { $c.Add('GDEA_GRUPOUSUARIO_MODIFICACION_Run') }
+    if ($n -match 'GRUPOUSUARIO' -and $n -match 'BAJA') { $c.Add('GDEA_GRUPOUSUARIO_BAJA_Run') }
 
-    if ($n -match 'REPORT') { return 'GDEA_REPORTES_Run' }
+    # REPORTES
+    if ($n -match 'REPORT') { $c.Add('GDEA_REPORTES_Run') }
 
+    # LOGIN / ACCESO (en tu HTML de ejemplo aparece "GDEARun")
+    if ($n -match 'LOGIN' -or $n -match 'ACCESOGDEA' -or $n -match 'OTORGARTURNO') {
+        $c.Add('GDEARun')             # tal como aparece en el reporte que pegaste
+        $c.Add('GDEA_RUN')
+        $c.Add('GDEA_LOGIN_Run')
+        $c.Add('GDEA_ACCESOGDEA_Run')
+    }
+
+    return $c.ToArray()
+}function Get-TestNameCandidates([string]$folderName) {
+    $n = Normalize-TestKey $folderName
+    $c = New-Object System.Collections.Generic.List[string]
+
+    # ---------- AGENDA ----------
+    if ($n -match 'AGENDA' -and $n -match 'ALTA')  { $c.Add('GDEA_AGENDA_ALTA_Run') }
+    if ($n -match 'AGENDA' -and ($n -match 'MODIF' -or $n -match 'MOD')) {
+        $c.Add('GDEA_AGENDA_MODIFICACION_Run')
+    }
+    if ($n -match 'AGENDA' -and $n -match 'BAJA') { $c.Add('GDEA_AGENDA_BAJA_Run') }
+
+    # ---------- LICENCIAS ----------
+    # Flujo Licencias (GENÉRICO) = SOLO LICENCIA ALTA
+    if (
+        $n -match 'LICEN' -and
+        -not ($n -match 'BAJA' -or $n -match 'MODIF' -or $n -match 'MOD')
+    ) {
+        $c.Add('GDEA_LICENCIA_ALTA_Run')
+        $c.Add('GDEA_LICENCIAS_ALTA_Run')
+    }
+
+    # Licencias explícitas
+    if ($n -match 'LICEN' -and $n -match 'ALTA') {
+        $c.Add('GDEA_LICENCIA_ALTA_Run')
+        $c.Add('GDEA_LICENCIAS_ALTA_Run')
+    }
+    if ($n -match 'LICEN' -and $n -match 'BAJA') {
+        $c.Add('GDEA_LICENCIA_BAJA_Run')
+        $c.Add('GDEA_LICENCIAS_BAJA_Run')
+    }
+
+    # ---------- EQUIPO PROFESIONAL ----------
+    if ($n -match 'EQUIPOPROFESIONAL' -and $n -match 'ALTA') {
+        $c.Add('GDEA_EQUIPOPROFESIONAL_ALTA_Run')
+    }
+    if ($n -match 'EQUIPOPROFESIONAL' -and ($n -match 'MODIF' -or $n -match 'MOD')) {
+        $c.Add('GDEA_EQUIPOPROFESIONAL_MODIFICACION_Run')
+    }
+    if ($n -match 'EQUIPOPROFESIONAL' -and $n -match 'BAJA') {
+        $c.Add('GDEA_EQUIPOPROFESIONAL_BAJA_Run')
+    }
+
+    # ---------- FERIADOS ----------
+    if ($n -match 'FERIAD' -and $n -match 'ALTA') {
+        $c.Add('GDEA_FERIADOS_ALTA_Run')
+    }
+    if ($n -match 'FERIAD' -and ($n -match 'MODIF' -or $n -match 'MOD')) {
+        $c.Add('GDEA_FERIADOS_MODIFICACION_Run')
+    }
+    if ($n -match 'FERIAD' -and $n -match 'BAJA') {
+        $c.Add('GDEA_FERIADOS_BAJA_Run')
+    }
+
+    # ---------- GRUPO USUARIO ----------
+    if ($n -match 'GRUPOUSUARIO' -and $n -match 'ALTA') {
+        $c.Add('GDEA_GRUPOUSUARIO_ALTA_Run')
+    }
+    if ($n -match 'GRUPOUSUARIO' -and ($n -match 'MODIF' -or $n -match 'MOD')) {
+        $c.Add('GDEA_GRUPOUSUARIO_MODIFICACION_Run')
+    }
+    if ($n -match 'GRUPOUSUARIO' -and $n -match 'BAJA') {
+        $c.Add('GDEA_GRUPOUSUARIO_BAJA_Run')
+    }
+
+    # ---------- REPORTES ----------
+    if ($n -match 'REPORT') {
+        $c.Add('GDEA_REPORTES_Run')
+    }
+
+    # ---------- LOGIN / ACCESO ----------
+    if ($n -match 'LOGIN' -or $n -match 'ACCESOGDEA' -or $n -match 'OTORGARTURNO') {
+        $c.Add('GDEARun')             # tal como aparece en tu Reporte General
+        $c.Add('GDEA_RUN')
+        $c.Add('GDEA_LOGIN_Run')
+        $c.Add('GDEA_ACCESOGDEA_Run')
+    }
+
+    return $c.ToArray()
+}
+
+function Convert-DurationToSeconds([string]$dur) {
+    # "36,96s" -> 36.96
+    if ([string]::IsNullOrWhiteSpace($dur)) { return $null }
+    $d = $dur.Trim().TrimEnd('s','S') -replace ',', '.'
+    $v = 0.0
+    if ([double]::TryParse($d, [ref]$v)) { return $v }
     return $null
 }
 
 function Build-ItemsFromImmediateSubfolders([string]$dateFolderPath, [hashtable]$testMap) {
-    $items = New-Object System.Collections.Generic.List[object]
+    $items   = New-Object System.Collections.Generic.List[object]
     $subdirs = Get-ChildItem -Path $dateFolderPath -Directory -ErrorAction SilentlyContinue | Sort-Object Name
 
     foreach ($d in $subdirs) {
@@ -130,23 +271,49 @@ function Build-ItemsFromImmediateSubfolders([string]$dateFolderPath, [hashtable]
             }
         }
 
-        $testName = Map-FolderToTestName $d.Name
-        $status = "UNKNOWN"
+        $status   = "UNKNOWN"
         $duration = ""
+        $picked   = @()
 
-        if ($testName -and $testMap.ContainsKey($testName)) {
-            $status = $testMap[$testName].Status
-            $duration = $testMap[$testName].Duration
+        $cands = Get-TestNameCandidates $d.Name
+        foreach ($cand in $cands) {
+            $k = Normalize-TestKey $cand
+            if ($k -and $testMap.ContainsKey($k)) {
+                $picked += $testMap[$k]
+            }
         }
 
-        if ([string]::IsNullOrEmpty($href)) {
+        if ($picked.Count -gt 0) {
+            # Si alguno falla -> FAIL, si todos OK -> OK
+            if ($picked | Where-Object { $_.Status -eq 'FAIL' }) {
+                $status = 'FAIL'
+            } else {
+                $status = 'OK'
+            }
+
+            # Duración: si hay varias (Licencias general), sumamos segundos si podemos
+            $secs = 0.0
+            $any = $false
+            foreach ($p in $picked) {
+                $s = Convert-DurationToSeconds $p.Duration
+                if ($s -ne $null) { $secs += $s; $any = $true }
+            }
+            if ($any) {
+                $duration = ("{0:N2}s" -f $secs) -replace '\.', ','   # decimal con coma
+            } else {
+                $duration = ($picked | Select-Object -First 1).Duration
+            }
+        }
+
+        # Si no hay reporte linkeable, forzamos UNKNOWN
+        if ([string]::IsNullOrWhiteSpace($href)) {
             $status = "UNKNOWN"
+            $duration = ""
         }
 
         $items.Add([PSCustomObject]@{
             Label    = Clean-Label $d.Name
             Href     = $href
-            TestName = $testName
             Status   = $status
             Duration = $duration
         })
@@ -171,7 +338,7 @@ Get-ChildItem -Path $root -Directory | Where-Object { $_.Name -match $regexFecha
 
         if ($counts.Total -eq 0 -and $testMap.Keys.Count -gt 0) {
             $counts.Total = $testMap.Keys.Count
-            $counts.Ok = @($testMap.Values | Where-Object { $_.Status -eq "OK" }).Count
+            $counts.Ok   = @($testMap.Values | Where-Object { $_.Status -eq "OK" }).Count
             $counts.Fail = @($testMap.Values | Where-Object { $_.Status -eq "FAIL" }).Count
         }
     }
@@ -232,12 +399,13 @@ Get-ChildItem -Path $root -Directory | Where-Object { $_.Name -match $regexFecha
 "@
 
     foreach ($it in $items) {
-        if ([string]::IsNullOrEmpty($it.Href)) {
+        if ([string]::IsNullOrWhiteSpace($it.Href)) {
             $outHtml += "<span class='qa-button unknown'>$($it.Label)</span>`n"
         } else {
             $btnClass = "unknown"
             if ($it.Status -eq "OK") { $btnClass = "ok" }
             elseif ($it.Status -eq "FAIL") { $btnClass = "fail" }
+
             $outHtml += "<a class='qa-button $btnClass' href='$($it.Href)' target='_blank'>$($it.Label)</a>`n"
         }
     }
@@ -252,15 +420,17 @@ Get-ChildItem -Path $root -Directory | Where-Object { $_.Name -match $regexFecha
 "@
 
     foreach ($it in $items) {
-        $icon = "&#9888;"  # warning
-        $cls = "unk"
-        $st = "UNKNOWN"
+        $icon = "&#9888;"
+        $cls  = "unk"
+        $st   = "UNKNOWN"
 
-        if ($it.Status -eq "OK") { $icon = "&#10004;"; $cls = "pass"; $st = "OK" }      # ✔
-        elseif ($it.Status -eq "FAIL") { $icon = "&#10006;"; $cls = "failtxt"; $st = "FAIL" } # ✖
+        if ($it.Status -eq "OK")   { $icon = "&#10004;"; $cls = "pass";    $st = "OK" }
+        elseif ($it.Status -eq "FAIL") { $icon = "&#10006;"; $cls = "failtxt"; $st = "FAIL" }
 
         $durTxt = ""
-        if (-not [string]::IsNullOrEmpty($it.Duration)) { $durTxt = " <span class='meta'>($($it.Duration))</span>" }
+        if (-not [string]::IsNullOrWhiteSpace($it.Duration)) {
+            $durTxt = " <span class='meta'>($($it.Duration))</span>"
+        }
 
         $outHtml += "<div class='test'><span class='$cls'>$icon</span> $($it.Label) <span class='meta'>- $st</span>$durTxt</div>`n"
     }
