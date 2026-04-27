@@ -250,7 +250,10 @@ ForEach-Object {
 
     $items = Build-ItemsFromImmediateSubfolders $datePath $testMap
 
+    
+    $projectFolder = Split-Path $root -Leaf
     $baseHref = "/$repoName/$dateName/"
+    
 
     # HTML REAL (NO escapado)
     $html = @"
