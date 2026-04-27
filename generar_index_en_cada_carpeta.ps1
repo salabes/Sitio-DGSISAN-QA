@@ -75,36 +75,48 @@ function Extract-Counts([string]$rawHtml) {
 # Acepta: class="test ok" y class='test ok'
 # ---------------------------------------------------------
 function Extract-TestResultsFromGeneral([string]$rawHtml) {
+
+    # 1) Primer intento: HTML normalizado (casos nuevos)
     $html = Normalize-Html $rawHtml
     $map  = @{}
 
-    # Regex en string single-quoted: para incluir ' se duplica -> ''
-    $pattern = '(?is)<div[^>]*class\s*=\s*(''|"")(?:[^''""]*)test\s+(ok|fail)(?:[^''""]*)\1[^>]*>\s*(.*?)\s*</div>'
+    $patternReal = '(?is)<div[^>]*class\s*=\s*("|\x27)(?:[^"\x27]*)test\s+(ok|fail)(?:[^"\x27]*)\1[^>]*>\s*(.*?)\s*</div>'
+    $matches = [regex]::Matches($html, $patternReal)
 
-    $matches = [regex]::Matches($html, $pattern)
+    # 2) Si no encontró nada, intentar HTML escapado (casos viejos)
+    if ($matches.Count -eq 0) {
+        $patternEscaped = '(?is)&lt;div[^&]*class\s*=\s*("|\x27)(?:[^"\x27]*)test\s+(ok|fail)(?:[^"\x27]*)\1[^&]*&gt;\s*(.*?)\s*&lt;/div&gt;'
+        $matches = [regex]::Matches($rawHtml, $patternEscaped)
+    }
+
     foreach ($m in $matches) {
-        $cls  = $m.Groups[2].Value.Trim().ToUpper()  # OK | FAIL
-        $text = ($m.Groups[3].Value -replace '\s+', ' ').Trim()
 
-        # nombre del test = primer token estilo GDEA_XXX_Run o GDEARun
-        $mn = [regex]::Match($text, '\b([A-Za-z0-9_]+)\b')
-        if (-not $mn.Success) { continue }
-        $name = $mn.Groups[1].Value.Trim()
+        $status = $m.Groups[2].Value.Trim().ToUpper()   # OK | FAIL
+        $text   = [System.Net.WebUtility]::HtmlDecode(
+                    ($m.Groups[3].Value -replace '\s+', ' ').Trim()
+                  )
 
-        # duración tipo 36,96s
+        # Nombre del test
+        if ($text -notmatch '\b([A-Za-z0-9_]+)\b') { continue }
+        $name = $matches[1]
+
+        # Duración
         $dur = ""
-        $md = [regex]::Match($text, '([0-9]+(?:[.,][0-9]+)?s)')
-        if ($md.Success) { $dur = $md.Groups[1].Value.Trim() }
+        if ($text -match '([0-9]+(?:[.,][0-9]+)?s)') {
+            $dur = $matches[1]
+        }
 
         $key = Normalize-TestKey $name
         if ($key) {
-            $map[$key] = @{ Status = $cls; Duration = $dur }
+            $map[$key] = @{
+                Status   = $status
+                Duration = $dur
+            }
         }
     }
 
     return $map
 }
-
 # ---------------------------------------------------------
 # Encontrar un HTML "reporte" dentro de la subcarpeta
 # ---------------------------------------------------------
